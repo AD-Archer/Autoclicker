@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, simpledialog
 import pyautogui
 import keyboard
 import threading
@@ -17,10 +17,10 @@ class AutoClickerApp:
         self.repeat_option = 'until stopped'
         self.repeat_count = 0
         self.positions = []
-        self.use_current_position = True  # Default to using current position
-        self.running = False
+        self.use_current_position = True  # Start with current position
         self.hotkey = 'F9'
         self.position_hotkey = 'esc'
+        self.running = False  # Initialize running
 
         self.create_widgets()
         self.update_repeat_options()
@@ -33,9 +33,6 @@ class AutoClickerApp:
         self.root.bind('<FocusOut>', self.on_focus_out)
 
     def create_widgets(self):
-        # Apply custom style
-        self.create_style()
-
         ttk.Label(self.root, text="AutoClicker", font=("Helvetica", 16)).grid(row=0, column=0, columnspan=4, padx=10, pady=10, sticky="n")
 
         ttk.Label(self.root, text="Click Interval (mm:ss:ms):").grid(row=1, column=0, padx=10, pady=5, sticky="w")
@@ -82,23 +79,16 @@ class AutoClickerApp:
         self.stop_button = ttk.Button(self.root, text="Stop", command=self.stop_autoclicker, state=tk.DISABLED)
         self.stop_button.grid(row=6, column=1, padx=10, pady=10, sticky="w")
 
-        self.hotkey_popup_button = ttk.Button(self.root, text=f"Set Hotkey: {self.hotkey}", command=self.capture_hotkey)
+        self.hotkey_popup_button = ttk.Button(self.root, text=f"Hotkey: {self.hotkey}", command=self.open_hotkey_popup)
         self.hotkey_popup_button.grid(row=7, column=0, padx=10, pady=10, sticky="w")
 
         self.set_positions_button = ttk.Button(self.root, text="Set Positions", command=self.start_position_selection)
         self.set_positions_button.grid(row=7, column=1, padx=10, pady=10, sticky="w")
 
-        # "Use Current Position" button with updated style
-        self.toggle_position_checkbox = ttk.Checkbutton(self.root, text="Use Current Position", command=self.toggle_current_position, style="Toggle.TCheckbutton")
+        self.toggle_position_checkbox = tk.Checkbutton(self.root, text="Use Current Position", variable=tk.BooleanVar(value=self.use_current_position), command=self.toggle_current_position)
         self.toggle_position_checkbox.grid(row=8, column=0, padx=10, pady=10, sticky="w")
 
-        # Set initial state
-        self.toggle_position_checkbox.state(["selected"])
-
-    def create_style(self):
-        style = ttk.Style()
-        style.configure("Toggle.TCheckbutton", background="lightgreen", foreground="black")
-        style.map("Toggle.TCheckbutton", background=[("selected", "lightgreen"), ("!selected", "lightgrey")])
+        self.update_current_position_button()
 
     def register_hotkeys(self):
         # Register the hotkey to start/stop autoclicker
@@ -171,52 +161,86 @@ class AutoClickerApp:
                     pyautogui.click(pos[0], pos[1], button=self.mouse_button)
                 else:
                     pyautogui.click(pos[0], pos[1], button=self.mouse_button, clicks=2)
-                time.sleep(self.click_interval[0] * 60 + self.click_interval[1] + self.click_interval[2] / 1000.0)
+                time.sleep(self.get_interval())
 
-    def toggle_current_position(self):
-        self.use_current_position = not self.use_current_position
-        # Update the state of the Set Positions button based on the use_current_position flag
-        if self.use_current_position:
-            self.set_positions_button.config(state=tk.NORMAL)
-        else:
-            self.set_positions_button.config(state=tk.DISABLED)
-        # Update the text color of the Toggle Position button
-        if self.use_current_position:
-            self.toggle_position_checkbox.config(style="Toggle.TCheckbutton")
-        else:
-            self.toggle_position_checkbox.config(style="Toggle.TCheckbutton")
+    def get_interval(self):
+        try:
+            return int(self.minutes_entry.get() or 0) * 60 + int(self.seconds_entry.get() or 0) + int(self.milliseconds_entry.get() or 0) / 1000.0
+        except ValueError:
+            return 0.1
 
-    def update_repeat_options(self, *args):
+    def update_repeat_options(self, event=None):
         if self.repeat_option_var.get() == 'number of times':
             self.repeat_count_entry.config(state=tk.NORMAL)
         else:
             self.repeat_count_entry.config(state=tk.DISABLED)
 
-    def capture_hotkey(self):
-        self.root.bind('<KeyPress>', self.set_hotkey)
-
-    def set_hotkey(self, event):
-        self.hotkey = event.keysym
-        self.hotkey_popup_button.config(text=f"Set Hotkey: {self.hotkey}")
-        self.unregister_hotkeys()
-        self.register_hotkeys()
-        self.root.unbind('<KeyPress>')
+    def toggle_current_position(self):
+        self.use_current_position = not self.use_current_position
+        self.update_current_position_button()
+        if self.use_current_position:
+            self.set_positions_button.config(state=tk.DISABLED)
+        else:
+            self.set_positions_button.config(state=tk.NORMAL)
 
     def start_position_selection(self):
+        self.use_current_position = False
+        self.toggle_position_checkbox.deselect()
         self.set_positions_button.config(state=tk.DISABLED)
-        self.toggle_position_checkbox.config(state=tk.DISABLED)
-        self.root.wait_window(tk.Toplevel(self.root))  # Open a new window to select positions
-        self.stop_position_selection()
+
+        self.positions.clear()
+        self.current_position = None
+
+        self.position_popup = tk.Toplevel(self.root)
+        self.position_popup.title("Position Selection")
+        self.position_popup.geometry("200x150")
+        self.position_popup.protocol("WM_DELETE_WINDOW", self.stop_position_selection)
+
+        ttk.Label(self.position_popup, text="Press 'Esc' to stop position selection.").pack(pady=10)
+        self.position_popup.bind('<KeyPress>', self.record_position)
+        self.position_popup.bind('<KeyRelease>', self.clear_keypress)
+
+        self.position_popup.mainloop()
 
     def stop_position_selection(self):
+        self.position_popup.destroy()
         self.set_positions_button.config(state=tk.NORMAL)
-        self.toggle_position_checkbox.config(state=tk.NORMAL)
+        self.update_current_position_button()
+
+    def record_position(self, event):
+        if event.keysym == 'Escape':
+            self.stop_position_selection()
+        else:
+            x, y = pyautogui.position()
+            self.positions.append((x, y))
+            print(f"Recorded position: ({x}, {y})")
+
+    def clear_keypress(self, event):
+        if event.keysym == 'Escape':
+            return
+
+    def open_hotkey_popup(self):
+        hotkey = simpledialog.askstring("Set Hotkey", "Press the key you want to use as hotkey:")
+        if hotkey:
+            self.hotkey = hotkey
+            self.unregister_hotkeys()
+            self.register_hotkeys()
+            self.hotkey_popup_button.config(text=f"Hotkey: {self.hotkey}")
 
     def on_focus_in(self, event):
-        self.root.attributes('-topmost', True)
+        self.register_hotkeys()
 
     def on_focus_out(self, event):
-        self.root.attributes('-topmost', False)
+        self.unregister_hotkeys()
+
+    def update_current_position_button(self):
+        self.toggle_position_checkbox.config(state=tk.NORMAL)
+        if self.use_current_position:
+            self.toggle_position_checkbox.select()
+            self.set_positions_button.config(state=tk.DISABLED)
+        else:
+            self.toggle_position_checkbox.deselect()
+            self.set_positions_button.config(state=tk.NORMAL)
 
 if __name__ == "__main__":
     root = tk.Tk()
